@@ -1,15 +1,12 @@
 import "../src/postgres"
+import "sdk/os/env"
 
 fn connStr(): str =>
-    var host: str = env("PGHOST")
-    var port: str = env("PGPORT")
-    var db: str   = env("PGDATABASE")
-    var user: str = env("PGUSER")
-    var pass: str = env("PGPASSWORD")
-    if host == "" => host = "localhost"
-    if port == "" => port = "5432"
-    if db == ""   => db = "postgres"
-    if user == "" => user = "postgres"
+    var host: str = Environment.getOr("PGHOST", "localhost")
+    var port: str = Environment.getOr("PGPORT", "5432")
+    var db: str   = Environment.getOr("PGDATABASE", "postgres")
+    var user: str = Environment.getOr("PGUSER", "postgres")
+    var pass: str = Environment.getOr("PGPASSWORD", "")
     return $"host={host} port={port} dbname={db} user={user} password={pass}"
 
 fn main(): void =>
