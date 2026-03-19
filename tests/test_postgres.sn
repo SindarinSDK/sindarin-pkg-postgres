@@ -1,5 +1,5 @@
 import "../src/postgres"
-import "sdk/os/env"
+import "../.sn/sindarin-pkg-sdk/src/os/env"
 
 fn connStr(): str =>
     var host: str = Environment.getOr("PGHOST", "localhost")
