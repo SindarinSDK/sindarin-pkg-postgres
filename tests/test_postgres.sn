@@ -1,0 +1,126 @@
+import "../src/postgres"
+
+fn connStr(): str =>
+    var host: str = env("PGHOST")
+    var port: str = env("PGPORT")
+    var db: str   = env("PGDATABASE")
+    var user: str = env("PGUSER")
+    var pass: str = env("PGPASSWORD")
+    if host == "" => host = "localhost"
+    if port == "" => port = "5432"
+    if db == ""   => db = "postgres"
+    if user == "" => user = "postgres"
+    return $"host={host} port={port} dbname={db} user={user} password={pass}"
+
+fn main(): void =>
+    var conn: PgConn = PgConn.connect(connStr())
+
+    # Test 1: CREATE TABLE
+    conn.exec("DROP TABLE IF EXISTS sn_pg_test")
+    conn.exec("CREATE TABLE sn_pg_test (id SERIAL PRIMARY KEY, name TEXT, age INT, score FLOAT8, notes TEXT)")
+    print("PASS: CREATE TABLE\n")
+
+    # Test 2: INSERT rows
+    conn.exec("INSERT INTO sn_pg_test (name, age, score, notes) VALUES ('Alice', 30, 9.5, 'first')")
+    conn.exec("INSERT INTO sn_pg_test (name, age, score, notes) VALUES ('Bob', 25, 7.2, NULL)")
+    print("PASS: INSERT\n")
+
+    # Test 3: query returns correct row count
+    var rows: PgRow[] = conn.query("SELECT * FROM sn_pg_test ORDER BY id")
+    if rows.length != 2 =>
+        print($"FAIL: expected 2 rows, got {rows.length}\n")
+        exit(1)
+    print("PASS: query row count\n")
+
+    # Test 4: getString
+    if rows[0].getString("name") != "Alice" =>
+        print($"FAIL: expected 'Alice', got '{rows[0].getString(\"name\")}'\n")
+        exit(1)
+    if rows[1].getString("name") != "Bob" =>
+        print($"FAIL: expected 'Bob', got '{rows[1].getString(\"name\")}'\n")
+        exit(1)
+    print("PASS: getString\n")
+
+    # Test 5: getInt
+    if rows[0].getInt("age") != 30 =>
+        print($"FAIL: expected age 30, got {rows[0].getInt(\"age\")}\n")
+        exit(1)
+    print("PASS: getInt\n")
+
+    # Test 6: getFloat
+    if rows[0].getFloat("score") != 9.5 =>
+        print($"FAIL: expected score 9.5, got {rows[0].getFloat(\"score\")}\n")
+        exit(1)
+    print("PASS: getFloat\n")
+
+    # Test 7: NULL detection
+    if rows[0].isNull("notes") =>
+        print("FAIL: Alice.notes should not be NULL\n")
+        exit(1)
+    if !rows[1].isNull("notes") =>
+        print("FAIL: Bob.notes should be NULL\n")
+        exit(1)
+    print("PASS: isNull\n")
+
+    # Test 8: columnCount and columnName
+    if rows[0].columnCount() != 5 =>
+        print($"FAIL: expected 5 columns, got {rows[0].columnCount()}\n")
+        exit(1)
+    if rows[0].columnName(0) != "id" =>
+        print($"FAIL: expected column 0 'id', got '{rows[0].columnName(0)}'\n")
+        exit(1)
+    print("PASS: columnCount / columnName\n")
+
+    # Test 9: prepared statement with string and int binding
+    var stmt: PgStmt = conn.prepare("insert_user", "INSERT INTO sn_pg_test (name, age, score) VALUES ($1, $2, $3)")
+    stmt.bindString(1, "Carol").bindInt(2, 35).bindFloat(3, 8.1).exec()
+    stmt.dispose()
+
+    var rows2: PgRow[] = conn.query("SELECT * FROM sn_pg_test WHERE name = 'Carol'")
+    if rows2.length != 1 =>
+        print($"FAIL: expected 1 Carol row, got {rows2.length}\n")
+        exit(1)
+    if rows2[0].getInt("age") != 35 =>
+        print($"FAIL: expected Carol age 35, got {rows2[0].getInt(\"age\")}\n")
+        exit(1)
+    print("PASS: prepared statement\n")
+
+    # Test 10: prepared statement reset and re-use
+    var insert: PgStmt = conn.prepare("insert_named", "INSERT INTO sn_pg_test (name, age) VALUES ($1, $2)")
+    insert.bindString(1, "Dave").bindInt(2, 40).exec()
+    insert.reset()
+    insert.bindString(1, "Eve").bindInt(2, 28).exec()
+    insert.dispose()
+
+    var rows3: PgRow[] = conn.query("SELECT COUNT(*) AS n FROM sn_pg_test")
+    if rows3[0].getInt("n") != 5 =>
+        print($"FAIL: expected 5 total rows, got {rows3[0].getInt(\"n\")}\n")
+        exit(1)
+    print("PASS: prepared statement reuse\n")
+
+    # Test 11: bindNull
+    var insert2: PgStmt = conn.prepare("insert_null", "INSERT INTO sn_pg_test (name, age, notes) VALUES ($1, $2, $3)")
+    insert2.bindString(1, "Frank").bindInt(2, 50).bindNull(3).exec()
+    insert2.dispose()
+
+    var rows4: PgRow[] = conn.query("SELECT * FROM sn_pg_test WHERE name = 'Frank'")
+    if !rows4[0].isNull("notes") =>
+        print("FAIL: Frank.notes should be NULL after bindNull\n")
+        exit(1)
+    print("PASS: bindNull\n")
+
+    # Test 12: prepared statement returning rows
+    var sel: PgStmt = conn.prepare("select_by_name", "SELECT name, age FROM sn_pg_test WHERE name = $1")
+    var rows5: PgRow[] = sel.bindString(1, "Alice").query()
+    if rows5.length != 1 =>
+        print($"FAIL: expected 1 row for Alice, got {rows5.length}\n")
+        exit(1)
+    if rows5[0].getInt("age") != 30 =>
+        print($"FAIL: expected Alice age 30, got {rows5[0].getInt(\"age\")}\n")
+        exit(1)
+    sel.dispose()
+    print("PASS: prepared statement query\n")
+
+    conn.exec("DROP TABLE sn_pg_test")
+    conn.dispose()
+    print("PASS\n")
