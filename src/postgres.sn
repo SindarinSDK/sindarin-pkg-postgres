@@ -185,14 +185,6 @@ native struct PgConn as ref =>
 # Runtime Function Declarations
 # ==============================================================================
 
-# PgRow
-native fn sn_pg_row_get_string(row: PgRow, col: str): str
-native fn sn_pg_row_get_int(row: PgRow, col: str): int
-native fn sn_pg_row_get_float(row: PgRow, col: str): double
-native fn sn_pg_row_is_null(row: PgRow, col: str): bool
-native fn sn_pg_row_column_count(row: PgRow): int
-native fn sn_pg_row_column_name(row: PgRow, index: int): str
-
 # PgStmt
 native fn sn_pg_stmt_bind_string(stmt: PgStmt, index: int, value: str): void
 native fn sn_pg_stmt_bind_int(stmt: PgStmt, index: int, value: int): void
