@@ -213,12 +213,7 @@ RtPgConn *sn_pg_conn_connect(char *conn_str)
         exit(1);
     }
 
-    RtPgConn *c = (RtPgConn *)calloc(1, sizeof(RtPgConn));
-    if (!c) {
-        fprintf(stderr, "PgConn.connect: allocation failed\n");
-        PQfinish(conn);
-        exit(1);
-    }
+    RtPgConn *c = __sn__PgConn__new();
     c->conn_ptr = (long long)(uintptr_t)conn;
     return c;
 }
@@ -263,11 +258,7 @@ RtPgStmt *sn_pg_conn_prepare(RtPgConn *c, char *name, char *sql)
         }
     }
 
-    RtPgStmt *s = (RtPgStmt *)calloc(1, sizeof(RtPgStmt));
-    if (!s) {
-        fprintf(stderr, "PgConn.prepare: allocation failed\n");
-        exit(1);
-    }
+    RtPgStmt *s = __sn__PgStmt__new();
     s->conn_ptr   = (long long)(uintptr_t)CONN_PTR(c);
     s->stmt_name  = (uint8_t *)strdup(name);
     s->param_count = (long long)param_count;
