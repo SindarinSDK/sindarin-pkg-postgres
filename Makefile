@@ -1,6 +1,6 @@
 # Sindarin Postgres Package - Makefile
 
-.PHONY: all test clean help
+.PHONY: all test hooks clean help
 
 # Disable implicit rules for .sn.c files (compiled by the Sindarin compiler)
 %.sn: %.sn.c
@@ -40,7 +40,7 @@ TEST_BINS := $(patsubst tests/%.sn,$(BIN_DIR)/%$(EXE_EXT),$(TEST_SRCS))
 #------------------------------------------------------------------------------
 all: test
 
-test: $(TEST_BINS)
+test: hooks $(TEST_BINS)
 	@echo "Running tests..."
 	@failed=0; \
 	for t in $(TEST_BINS); do \
@@ -69,6 +69,12 @@ clean:
 	@echo "Cleaning build artifacts..."
 	@rm -rf $(BIN_DIR) .sn
 	@echo "Clean complete."
+
+#------------------------------------------------------------------------------
+# hooks - Configure git to use tracked pre-commit hooks
+#------------------------------------------------------------------------------
+hooks:
+	@git config core.hooksPath .githooks 2>/dev/null || true
 
 help:
 	@echo "Sindarin Postgres Package"
