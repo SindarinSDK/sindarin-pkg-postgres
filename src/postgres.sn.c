@@ -31,9 +31,130 @@ typedef __sn__PgRow   RtPgRow;
 
 /* ============================================================================
  * Internal Helpers
- * ============================================================================ */
+ * ============================================================================
+ *
+ * SnPgConn is the C-side wrapper stored in RtPgConn.conn_ptr. It holds
+ * the libpq PGconn alongside the original connection string and a cache
+ * of every prepared statement (name → sql). This is what makes the
+ * package survive a transient postgres outage:
+ *
+ *   1. Any libpq op that fails AND finds the connection in a bad state
+ *      triggers PQreset on the existing PGconn pointer.
+ *   2. After a successful reset every cached prepared statement is
+ *      re-issued via PQprepare so server-side state matches client-side
+ *      expectations.
+ *   3. The original op is retried ONCE. If the retry also fails, the
+ *      package falls through to the original exit(1) hard-fail behaviour.
+ *
+ * The PgStmt struct stores its conn_ptr as a SnPgConn* (not a raw
+ * PGconn*) so prepared-statement execs can access the wrapper's
+ * statement cache + reconnect machinery the same way.
+ *
+ * Other consumers do not need to know any of this — the .sn API
+ * surface is unchanged.
+ */
 
-#define CONN_PTR(c) ((PGconn *)(uintptr_t)(c)->conn_ptr)
+typedef struct {
+    PGconn *conn;
+    char   *conn_str;
+
+    /* Prepared statement cache, replayed on reconnect. */
+    int     cache_count;
+    int     cache_cap;
+    char  **cache_names;
+    char  **cache_sqls;
+} SnPgConn;
+
+#define CONN_W(c)   ((SnPgConn *)(uintptr_t)(c)->conn_ptr)
+#define CONN_PTR(c) (CONN_W(c)->conn)
+
+static SnPgConn *snpg_new(PGconn *conn, const char *conn_str)
+{
+    SnPgConn *w = (SnPgConn *)calloc(1, sizeof(SnPgConn));
+    if (!w) {
+        fprintf(stderr, "postgres: snpg_new: allocation failed\n");
+        exit(1);
+    }
+    w->conn = conn;
+    w->conn_str = conn_str ? strdup(conn_str) : NULL;
+    return w;
+}
+
+static void snpg_free(SnPgConn *w)
+{
+    if (!w) return;
+    if (w->conn) PQfinish(w->conn);
+    free(w->conn_str);
+    for (int i = 0; i < w->cache_count; i++) {
+        free(w->cache_names[i]);
+        free(w->cache_sqls[i]);
+    }
+    free(w->cache_names);
+    free(w->cache_sqls);
+    free(w);
+}
+
+static void snpg_cache_add(SnPgConn *w, const char *name, const char *sql)
+{
+    if (!w || !name || !sql) return;
+    /* Skip duplicates — re-preparing the same name is harmless on a fresh
+     * server but the cache should not grow per-call when the caller uses
+     * stable statement names. */
+    for (int i = 0; i < w->cache_count; i++) {
+        if (strcmp(w->cache_names[i], name) == 0) {
+            /* Update SQL in case it changed (rare) */
+            if (strcmp(w->cache_sqls[i], sql) != 0) {
+                free(w->cache_sqls[i]);
+                w->cache_sqls[i] = strdup(sql);
+            }
+            return;
+        }
+    }
+    if (w->cache_count >= w->cache_cap) {
+        int new_cap = w->cache_cap == 0 ? 16 : w->cache_cap * 2;
+        char **new_names = (char **)realloc(w->cache_names, (size_t)new_cap * sizeof(char *));
+        char **new_sqls  = (char **)realloc(w->cache_sqls,  (size_t)new_cap * sizeof(char *));
+        if (!new_names || !new_sqls) {
+            fprintf(stderr, "postgres: snpg_cache_add: realloc failed\n");
+            exit(1);
+        }
+        w->cache_names = new_names;
+        w->cache_sqls  = new_sqls;
+        w->cache_cap   = new_cap;
+    }
+    w->cache_names[w->cache_count] = strdup(name);
+    w->cache_sqls[w->cache_count]  = strdup(sql);
+    w->cache_count++;
+}
+
+/* Try to bring the connection back up after a server-side crash. Calls
+ * PQreset (which keeps the existing PGconn pointer valid — important
+ * because PgStmt instances hold pointers into the wrapper) and replays
+ * every cached prepared statement. Returns true on success. */
+static bool snpg_try_reconnect(SnPgConn *w)
+{
+    if (!w || !w->conn) return false;
+    fprintf(stderr, "postgres: connection lost — attempting PQreset\n");
+    PQreset(w->conn);
+    if (PQstatus(w->conn) != CONNECTION_OK) {
+        fprintf(stderr, "postgres: PQreset failed: %s\n", PQerrorMessage(w->conn));
+        return false;
+    }
+    fprintf(stderr, "postgres: PQreset succeeded; re-preparing %d cached statement(s)\n",
+            w->cache_count);
+    for (int i = 0; i < w->cache_count; i++) {
+        PGresult *r = PQprepare(w->conn, w->cache_names[i], w->cache_sqls[i], 0, NULL);
+        ExecStatusType st = PQresultStatus(r);
+        if (st != PGRES_COMMAND_OK) {
+            fprintf(stderr, "postgres: re-prepare '%s' failed: %s\n",
+                    w->cache_names[i], PQerrorMessage(w->conn));
+            PQclear(r);
+            return false;
+        }
+        PQclear(r);
+    }
+    return true;
+}
 
 static void pg_check_conn(PGconn *conn, const char *ctx)
 {
@@ -43,6 +164,9 @@ static void pg_check_conn(PGconn *conn, const char *ctx)
     }
 }
 
+/* Called after the FINAL attempt of a query/exec/prepare. If the
+ * status is not OK at this point we have already exhausted the
+ * retry budget — log and exit. */
 static void pg_check_result(PGresult *res, PGconn *conn, const char *ctx)
 {
     ExecStatusType status = PQresultStatus(res);
@@ -51,6 +175,24 @@ static void pg_check_result(PGresult *res, PGconn *conn, const char *ctx)
         PQclear(res);
         exit(1);
     }
+}
+
+/* Inspect the result and decide whether the caller should retry the
+ * operation after reconnecting. Returns true ONLY when:
+ *   - the result indicates failure
+ *   - AND the connection is now in a bad state
+ *   - AND PQreset successfully restored it
+ * In all other cases returns false (caller proceeds, pg_check_result
+ * will exit on a real error). */
+static bool pg_should_retry(PGresult *res, SnPgConn *w, const char *ctx)
+{
+    if (!res || !w) return false;
+    ExecStatusType status = PQresultStatus(res);
+    if (status == PGRES_COMMAND_OK || status == PGRES_TUPLES_OK) return false;
+    if (PQstatus(w->conn) == CONNECTION_OK) return false;
+    fprintf(stderr, "postgres: %s: server connection dropped (%s)\n",
+            ctx, PQerrorMessage(w->conn));
+    return snpg_try_reconnect(w);
 }
 
 /* ============================================================================
@@ -213,24 +355,35 @@ RtPgConn *sn_pg_conn_connect(char *conn_str)
         exit(1);
     }
 
+    SnPgConn *w = snpg_new(conn, conn_str);
     RtPgConn *c = __sn__PgConn__new();
-    c->conn_ptr = (long long)(uintptr_t)conn;
+    c->conn_ptr = (long long)(uintptr_t)w;
     return c;
 }
 
 void sn_pg_conn_exec(RtPgConn *c, char *sql)
 {
     if (!c || !sql) return;
-    PGresult *res = PQexec(CONN_PTR(c), sql);
-    pg_check_result(res, CONN_PTR(c), "exec");
+    SnPgConn *w = CONN_W(c);
+    PGresult *res = PQexec(w->conn, sql);
+    if (pg_should_retry(res, w, "exec")) {
+        PQclear(res);
+        res = PQexec(w->conn, sql);
+    }
+    pg_check_result(res, w->conn, "exec");
     PQclear(res);
 }
 
 SnArray *sn_pg_conn_query(RtPgConn *c, char *sql)
 {
     if (!c || !sql) return sn_array_new(sizeof(RtPgRow), 0);
-    PGresult *res = PQexec(CONN_PTR(c), sql);
-    pg_check_result(res, CONN_PTR(c), "query");
+    SnPgConn *w = CONN_W(c);
+    PGresult *res = PQexec(w->conn, sql);
+    if (pg_should_retry(res, w, "query")) {
+        PQclear(res);
+        res = PQexec(w->conn, sql);
+    }
+    pg_check_result(res, w->conn, "query");
     SnArray *arr = collect_rows(res);
     PQclear(res);
     return arr;
@@ -243,9 +396,18 @@ RtPgStmt *sn_pg_conn_prepare(RtPgConn *c, char *name, char *sql)
         exit(1);
     }
 
-    PGresult *res = PQprepare(CONN_PTR(c), name, sql, 0, NULL);
-    pg_check_result(res, CONN_PTR(c), "prepare");
+    SnPgConn *w = CONN_W(c);
+    PGresult *res = PQprepare(w->conn, name, sql, 0, NULL);
+    if (pg_should_retry(res, w, "prepare")) {
+        PQclear(res);
+        res = PQprepare(w->conn, name, sql, 0, NULL);
+    }
+    pg_check_result(res, w->conn, "prepare");
     PQclear(res);
+
+    /* Cache the (name, sql) so a future reconnect can replay this
+     * preparation against the new server-side state. */
+    snpg_cache_add(w, name, sql);
 
     /* Count parameters by scanning for $N placeholders */
     int param_count = 0;
@@ -259,7 +421,7 @@ RtPgStmt *sn_pg_conn_prepare(RtPgConn *c, char *name, char *sql)
     }
 
     RtPgStmt *s = __sn__PgStmt__new();
-    s->conn_ptr   = (long long)(uintptr_t)CONN_PTR(c);
+    s->conn_ptr   = (long long)(uintptr_t)w;
     s->stmt_name  = (uint8_t *)strdup(name);
     s->param_count = (long long)param_count;
 
@@ -289,15 +451,21 @@ char *sn_pg_conn_last_error(RtPgConn *c)
 void sn_pg_conn_dispose(RtPgConn *c)
 {
     if (!c) return;
-    PQfinish(CONN_PTR(c));
+    snpg_free(CONN_W(c));
     c->conn_ptr = 0;
 }
 
 /* ============================================================================
  * PgStmt — parameter binding and execution
+ *
+ * The conn_ptr field on RtPgStmt holds a SnPgConn* (the wrapper), not a
+ * raw PGconn*. STMT_CONN extracts the live PGconn from the wrapper so
+ * exec/query/dispose all see whatever PQreset has done since the
+ * statement was prepared.
  * ============================================================================ */
 
-#define STMT_CONN(s)  ((PGconn *)(uintptr_t)(s)->conn_ptr)
+#define STMT_W(s)     ((SnPgConn *)(uintptr_t)(s)->conn_ptr)
+#define STMT_CONN(s)  (STMT_W(s)->conn)
 #define STMT_NAME(s)  ((const char *)(s)->stmt_name)
 #define STMT_VALS(s)  ((char **)(uintptr_t)(s)->param_values)
 #define STMT_NULLS(s) ((bool *)(uintptr_t)(s)->param_nulls)
@@ -365,16 +533,26 @@ static PGresult *stmt_exec_internal(RtPgStmt *s)
 void sn_pg_stmt_exec(RtPgStmt *s)
 {
     if (!s) return;
+    SnPgConn *w = STMT_W(s);
     PGresult *res = stmt_exec_internal(s);
-    pg_check_result(res, STMT_CONN(s), "stmt exec");
+    if (pg_should_retry(res, w, "stmt exec")) {
+        PQclear(res);
+        res = stmt_exec_internal(s);
+    }
+    pg_check_result(res, w->conn, "stmt exec");
     PQclear(res);
 }
 
 SnArray *sn_pg_stmt_query(RtPgStmt *s)
 {
     if (!s) return sn_array_new(sizeof(RtPgRow), 0);
+    SnPgConn *w = STMT_W(s);
     PGresult *res = stmt_exec_internal(s);
-    pg_check_result(res, STMT_CONN(s), "stmt query");
+    if (pg_should_retry(res, w, "stmt query")) {
+        PQclear(res);
+        res = stmt_exec_internal(s);
+    }
+    pg_check_result(res, w->conn, "stmt query");
     SnArray *arr = collect_rows(res);
     PQclear(res);
     return arr;
