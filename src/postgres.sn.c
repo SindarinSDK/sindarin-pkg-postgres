@@ -127,6 +127,23 @@ static void snpg_cache_add(SnPgConn *w, const char *name, const char *sql)
     w->cache_count++;
 }
 
+static void snpg_cache_remove(SnPgConn *w, const char *name)
+{
+    if (!w || !name) return;
+    for (int i = 0; i < w->cache_count; i++) {
+        if (strcmp(w->cache_names[i], name) == 0) {
+            free(w->cache_names[i]);
+            free(w->cache_sqls[i]);
+            for (int j = i; j < w->cache_count - 1; j++) {
+                w->cache_names[j] = w->cache_names[j + 1];
+                w->cache_sqls[j]  = w->cache_sqls[j + 1];
+            }
+            w->cache_count--;
+            return;
+        }
+    }
+}
+
 /* Try to bring the connection back up after a server-side crash. Calls
  * PQreset (which keeps the existing PGconn pointer valid — important
  * because PgStmt instances hold pointers into the wrapper) and replays
@@ -574,6 +591,19 @@ void sn_pg_stmt_reset(RtPgStmt *s)
 void sn_pg_stmt_dispose(RtPgStmt *s)
 {
     if (!s) return;
+
+    /* Deallocate the server-side prepared statement and remove from the
+     * reconnect cache so it does not accumulate indefinitely. */
+    SnPgConn *w = STMT_W(s);
+    if (w && w->conn && s->stmt_name) {
+        const char *name = STMT_NAME(s);
+        char dealloc[512];
+        snprintf(dealloc, sizeof(dealloc), "DEALLOCATE \"%s\"", name);
+        PGresult *r = PQexec(w->conn, dealloc);
+        PQclear(r);
+        snpg_cache_remove(w, name);
+    }
+
     int    n    = (int)s->param_count;
     char **vals = STMT_VALS(s);
     if (vals) {
