@@ -38,6 +38,31 @@ foreach(_pc libssl.pc libcrypto.pc openssl.pc)
     endif()
 endforeach()
 
+# CMake wrapper so find_package(OpenSSL) works for CMake-based consumers
+file(WRITE "${CURRENT_PACKAGES_DIR}/share/${PORT}/vcpkg-cmake-wrapper.cmake" [[
+_find_package(${ARGS})
+if(NOT OPENSSL_FOUND)
+    set(OPENSSL_FOUND TRUE)
+    set(OPENSSL_INCLUDE_DIR "${_VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include")
+    set(OPENSSL_CRYPTO_LIBRARY "${_VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib/libcrypto.a")
+    set(OPENSSL_SSL_LIBRARY "${_VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib/libssl.a")
+    set(OPENSSL_LIBRARIES "${OPENSSL_SSL_LIBRARY};${OPENSSL_CRYPTO_LIBRARY}")
+    if(NOT TARGET OpenSSL::Crypto)
+        add_library(OpenSSL::Crypto STATIC IMPORTED)
+        set_target_properties(OpenSSL::Crypto PROPERTIES
+            IMPORTED_LOCATION "${OPENSSL_CRYPTO_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${OPENSSL_INCLUDE_DIR}")
+    endif()
+    if(NOT TARGET OpenSSL::SSL)
+        add_library(OpenSSL::SSL STATIC IMPORTED)
+        set_target_properties(OpenSSL::SSL PROPERTIES
+            IMPORTED_LOCATION "${OPENSSL_SSL_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${OPENSSL_INCLUDE_DIR}"
+            INTERFACE_LINK_LIBRARIES "OpenSSL::Crypto")
+    endif()
+endif()
+]])
+
 # Copyright
 file(WRITE "${CURRENT_PACKAGES_DIR}/share/${PORT}/copyright"
     "OpenSSL is licensed under the Apache License 2.0.\nPre-built binaries provided by sindarin-pkg-libs.\n")
