@@ -19,7 +19,7 @@ jobs:
     uses: SindarinSDK/sindarin-pipelines/.github/workflows/sindarin-lib-release.yml@main
     secrets: inherit
     with:
-      package-name: sindarin-postgres
+      package-name: sindarin-pkg-postgres
       apt-packages: "autoconf gperf flex bison perl"
       brew-packages: "autoconf gperf flex bison"
       choco-packages: "winflexbison3"
