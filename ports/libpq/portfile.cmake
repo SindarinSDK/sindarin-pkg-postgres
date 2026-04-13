@@ -52,6 +52,20 @@ if(VCPKG_DETECTED_MSVC)
 else()
     file(COPY "${CMAKE_CURRENT_LIST_DIR}/Makefile" DESTINATION "${SOURCE_PATH}")
 
+    # vcpkg downloads bison/flex as win_bison.exe / win_flex.exe, but the
+    # autoconf configure script searches for "bison" / "flex" by name.
+    # Create copies so configure can find them.
+    if(VCPKG_HOST_IS_WINDOWS)
+        get_filename_component(_bison_dir "${BISON}" DIRECTORY)
+        if(NOT EXISTS "${_bison_dir}/bison.exe")
+            file(COPY_FILE "${BISON}" "${_bison_dir}/bison.exe")
+        endif()
+        get_filename_component(_flex_dir "${FLEX}" DIRECTORY)
+        if(NOT EXISTS "${_flex_dir}/flex.exe")
+            file(COPY_FILE "${FLEX}" "${_flex_dir}/flex.exe")
+        endif()
+    endif()
+
     vcpkg_list(SET BUILD_OPTS)
     foreach(option IN ITEMS bonjour icu lz4 readline zlib zstd)
         if(option IN_LIST FEATURES)
@@ -110,6 +124,21 @@ else()
         OPTIONS_DEBUG
             --enable-debug
     )
+
+    # Fix: On MinGW/Windows, ./configure records Windows backslash paths
+    # (e.g. C:\Users) in the CONFIGURE_ARGS macro in pg_config.h. Clang treats
+    # \U as a universal character name escape, causing a compile error in
+    # config_info.c. Replace with an empty string before compilation.
+    if(VCPKG_TARGET_IS_MINGW)
+        foreach(_buildtype IN ITEMS "rel" "dbg")
+            set(_pg_config_h "${CURRENT_BUILDTREES_DIR}/${TARGET_TRIPLET}-${_buildtype}/src/include/pg_config.h")
+            if(EXISTS "${_pg_config_h}")
+                file(READ "${_pg_config_h}" _pg_config_content)
+                string(REGEX REPLACE "#define CONFIGURE_ARGS \"[^\"]*\"" "#define CONFIGURE_ARGS \"\"" _pg_config_content "${_pg_config_content}")
+                file(WRITE "${_pg_config_h}" "${_pg_config_content}")
+            endif()
+        endforeach()
+    endif()
 
     if(VCPKG_LIBRARY_LINKAGE STREQUAL "dynamic")
         set(ENV{LIBPQ_LIBRARY_TYPE} shared)
