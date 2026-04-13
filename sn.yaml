@@ -1,5 +1,5 @@
 name: sindarin-pkg-postgres
-version: 1.0.0
+version: 0.0.2
 license: MIT
 dependencies:
 - name: sindarin-pkg-libs
