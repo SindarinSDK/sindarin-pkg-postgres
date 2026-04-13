@@ -1,6 +1,6 @@
 # Sindarin Postgres Package - Makefile
 
-.PHONY: all test hooks clean help
+.PHONY: all test hooks install-libs release-build clean help
 
 # Disable implicit rules for .sn.c files (compiled by the Sindarin compiler)
 %.sn: %.sn.c
@@ -64,6 +64,39 @@ $(BIN_DIR):
 
 $(BIN_DIR)/%$(EXE_EXT): tests/%.sn $(SRC_SOURCES) | $(BIN_DIR)
 	@$(SN) $< -o $@ -l 1
+
+#------------------------------------------------------------------------------
+# Library installation (auto-downloads native libs if not present)
+#------------------------------------------------------------------------------
+install-libs: libs/$(PLATFORM)
+
+libs/$(PLATFORM):
+ifeq ($(OS),Windows_NT)
+	@powershell -ExecutionPolicy Bypass -File scripts/install.ps1
+else
+	@bash scripts/install.sh
+endif
+
+#------------------------------------------------------------------------------
+# Release build (called by sindarin-pipelines/sindarin-lib-release.yml)
+#------------------------------------------------------------------------------
+VCPKG_ROOT ?= $(CURDIR)/vcpkg
+TRIPLET    ?= $(if $(filter windows,$(PLATFORM)),x64-mingw-static,$(if $(filter aarch64,$(shell uname -m 2>/dev/null)),arm64,x64)-$(if $(filter darwin,$(PLATFORM)),osx,linux))
+ARCH       ?= $(if $(filter aarch64,$(shell uname -m 2>/dev/null)),arm64,x64)
+VERSION    ?= local
+
+release-build:
+	@if [ ! -x "$(VCPKG_ROOT)/vcpkg" ] && [ ! -x "$(VCPKG_ROOT)/vcpkg.exe" ]; then \
+	    echo "Bootstrapping vcpkg into $(VCPKG_ROOT)..." && \
+	    git clone https://github.com/microsoft/vcpkg.git "$(VCPKG_ROOT)" && \
+	    "$(VCPKG_ROOT)/bootstrap-vcpkg.sh" -disableMetrics; \
+	fi
+	VCPKG_MAX_CONCURRENCY=1 "$(VCPKG_ROOT)/vcpkg" install --triplet=$(TRIPLET) --x-install-root=vcpkg/installed
+	mkdir -p libs/$(PLATFORM)/lib libs/$(PLATFORM)/include
+	find vcpkg/installed/$(TRIPLET)/lib -maxdepth 1 -name "*.a" -exec cp {} libs/$(PLATFORM)/lib/ \;
+	cp -r vcpkg/installed/$(TRIPLET)/include/* libs/$(PLATFORM)/include/
+	echo "$(VERSION)" > libs/$(PLATFORM)/VERSION
+	echo "$(PLATFORM)" > libs/$(PLATFORM)/PLATFORM
 
 clean:
 	@echo "Cleaning build artifacts..."

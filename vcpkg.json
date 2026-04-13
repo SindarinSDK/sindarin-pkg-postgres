@@ -1,0 +1,14 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "sindarin-postgres",
+  "version": "1.0.0",
+  "description": "PostgreSQL client library (libpq) for Sindarin",
+  "dependencies": [
+    {
+      "name": "libpq",
+      "default-features": false,
+      "features": ["openssl"]
+    },
+    "openssl"
+  ]
+}
