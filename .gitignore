@@ -1,5 +1,7 @@
 .sn/
 bin/
+libs/
+vcpkg/
 *.exe
 *.o
 *.so

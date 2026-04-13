@@ -8,50 +8,5 @@ on:
   workflow_dispatch:
 
 jobs:
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: testdb
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Prerequisites
-        uses: SindarinSDK/sindarin-pipelines/.github/actions/setup-prereqs@main
-
-      - name: Install Sindarin
-        uses: SindarinSDK/sindarin-pipelines/.github/actions/install-sindarin@main
-
-      - name: Install dependencies
-        uses: SindarinSDK/sindarin-pipelines/.github/actions/install-deps@main
-        with:
-          github-token: ${{ github.token }}
-
-      - name: Run tests
-        shell: bash
-        env:
-          PGHOST: localhost
-          PGPORT: 5432
-          PGDATABASE: testdb
-          PGUSER: postgres
-          PGPASSWORD: postgres
-        run: make test
-
-      - name: Diagnose compile errors
-        if: failure()
-        uses: SindarinSDK/sindarin-pipelines/.github/actions/diagnose-pkg@main
+  sindarin-pkg-test:
+    uses: SindarinSDK/sindarin-pipelines/.github/workflows/sindarin-pkg-test.yml@main

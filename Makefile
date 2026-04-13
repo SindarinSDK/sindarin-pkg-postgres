@@ -1,18 +1,13 @@
-# Sindarin Postgres Package - Makefile
+# Sindarin PostgreSQL Package
 
-.PHONY: all test hooks install-libs release-build clean help
+.PHONY: setup test build teardown
 
-# Disable implicit rules for .sn.c files (compiled by the Sindarin compiler)
 %.sn: %.sn.c
 	@:
 
-#------------------------------------------------------------------------------
-# Platform Detection
-#------------------------------------------------------------------------------
 ifeq ($(OS),Windows_NT)
     PLATFORM := windows
     EXE_EXT  := .exe
-    MKDIR    := mkdir
 else
     UNAME_S := $(shell uname -s 2>/dev/null || echo Unknown)
     ifeq ($(UNAME_S),Darwin)
@@ -21,79 +16,50 @@ else
         PLATFORM := linux
     endif
     EXE_EXT :=
-    MKDIR   := mkdir -p
 endif
 
-#------------------------------------------------------------------------------
-# Configuration
-#------------------------------------------------------------------------------
-BIN_DIR := bin
-SN      ?= sn
+BIN_DIR      := bin
+SN           ?= sn
+SRC_SOURCES  := $(wildcard src/*.sn) $(wildcard src/*.sn.c)
+RUN_TESTS_SN := .sn/sindarin-pkg-test/src/execute.sn
+RUN_TESTS    := $(BIN_DIR)/run_tests$(EXE_EXT)
 
-SRC_SOURCES := $(wildcard src/*.sn) $(wildcard src/*.sn.c)
-
-TEST_SRCS := $(wildcard tests/test_*.sn)
-TEST_BINS := $(patsubst tests/%.sn,$(BIN_DIR)/%$(EXE_EXT),$(TEST_SRCS))
-
-#------------------------------------------------------------------------------
-# Targets
-#------------------------------------------------------------------------------
-all: test
-
-test: hooks $(TEST_BINS)
-	@echo "Running tests..."
-	@failed=0; \
-	for t in $(TEST_BINS); do \
-	    printf "  %-50s" "$$t"; \
-	    if $$t; then \
-	        echo "PASS"; \
-	    else \
-	        echo "FAIL"; \
-	        failed=1; \
-	    fi; \
-	done; \
-	if [ $$failed -eq 0 ]; then \
-	    echo "All tests passed."; \
-	else \
-	    echo "Some tests failed."; \
-	    exit 1; \
-	fi
-
-$(BIN_DIR):
-	@$(MKDIR) $(BIN_DIR)
-
-$(BIN_DIR)/%$(EXE_EXT): tests/%.sn $(SRC_SOURCES) | $(BIN_DIR)
-	@$(SN) $< -o $@ -l 1
-
-#------------------------------------------------------------------------------
-# Library installation (auto-downloads native libs if not present)
-#------------------------------------------------------------------------------
-install-libs: libs/$(PLATFORM)
-
-libs/$(PLATFORM):
+setup:
+	@$(SN) --install
 ifeq ($(OS),Windows_NT)
 	@powershell -ExecutionPolicy Bypass -File scripts/install.ps1
 else
 	@bash scripts/install.sh
 endif
+	@docker compose up -d --wait
 
-#------------------------------------------------------------------------------
-# Release build (called by sindarin-pipelines/sindarin-lib-release.yml)
-#------------------------------------------------------------------------------
+test: setup $(RUN_TESTS)
+	@PGHOST=localhost PGPORT=5432 PGDATABASE=testdb PGUSER=postgres PGPASSWORD=postgres \
+	 SN_CFLAGS="-I$(CURDIR)/libs/$(PLATFORM)/include $(SN_CFLAGS)" \
+	 SN_LDFLAGS="-L$(CURDIR)/libs/$(PLATFORM)/lib $(SN_LDFLAGS)" \
+	 $(RUN_TESTS) --verbose
+
+teardown:
+	@docker compose down
+
+$(BIN_DIR):
+	@mkdir -p $(BIN_DIR)
+
+$(RUN_TESTS): $(RUN_TESTS_SN) $(SRC_SOURCES) | $(BIN_DIR)
+	@SN_CFLAGS="-I$(CURDIR)/libs/$(PLATFORM)/include $(SN_CFLAGS)" \
+	 SN_LDFLAGS="-L$(CURDIR)/libs/$(PLATFORM)/lib $(SN_LDFLAGS)" \
+	 $(SN) $(RUN_TESTS_SN) -o $@ -l 1
+
 VCPKG_ROOT ?= $(CURDIR)/vcpkg
 TRIPLET    ?= $(if $(filter windows,$(PLATFORM)),x64-mingw-static,$(if $(filter aarch64,$(shell uname -m 2>/dev/null)),arm64,x64)-$(if $(filter darwin,$(PLATFORM)),osx,linux))
 ARCH       ?= $(if $(filter aarch64,$(shell uname -m 2>/dev/null)),arm64,x64)
 VERSION    ?= local
 
-release-build:
+build:
 	@if [ ! -x "$(VCPKG_ROOT)/vcpkg" ] && [ ! -x "$(VCPKG_ROOT)/vcpkg.exe" ]; then \
-	    echo "Bootstrapping vcpkg into $(VCPKG_ROOT)..." && \
-	    git clone https://github.com/microsoft/vcpkg.git "$(VCPKG_ROOT)" && \
+	    echo "Bootstrapping vcpkg..." && \
+	    git clone --depth=1 https://github.com/microsoft/vcpkg.git "$(VCPKG_ROOT)" && \
 	    "$(VCPKG_ROOT)/bootstrap-vcpkg.sh" -disableMetrics; \
-	fi
-	@if [ -f "C:/ProgramData/chocolatey/bin/win_bison.exe" ]; then \
-	    cp "C:/ProgramData/chocolatey/bin/win_bison.exe" "C:/ProgramData/chocolatey/bin/bison.exe" 2>/dev/null || true; \
-	    cp "C:/ProgramData/chocolatey/bin/win_flex.exe" "C:/ProgramData/chocolatey/bin/flex.exe" 2>/dev/null || true; \
 	fi
 	SN_LIBS_ARCH=$(ARCH) $(SN) --install
 	"$(VCPKG_ROOT)/vcpkg" install --triplet=$(TRIPLET) --x-install-root=vcpkg/installed
@@ -102,24 +68,3 @@ release-build:
 	cp -r vcpkg/installed/$(TRIPLET)/include/* libs/$(PLATFORM)/include/
 	echo "$(VERSION)" > libs/$(PLATFORM)/VERSION
 	echo "$(PLATFORM)" > libs/$(PLATFORM)/PLATFORM
-
-clean:
-	@echo "Cleaning build artifacts..."
-	@rm -rf $(BIN_DIR) .sn
-	@echo "Clean complete."
-
-#------------------------------------------------------------------------------
-# hooks - Configure git to use tracked pre-commit hooks
-#------------------------------------------------------------------------------
-hooks:
-	@git config core.hooksPath .githooks 2>/dev/null || true
-
-help:
-	@echo "Sindarin Postgres Package"
-	@echo ""
-	@echo "Targets:"
-	@echo "  make test    Build and run all tests"
-	@echo "  make clean   Remove build artifacts"
-	@echo "  make help    Show this help"
-	@echo ""
-	@echo "Platform: $(PLATFORM)"
