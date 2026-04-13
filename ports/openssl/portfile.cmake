@@ -38,29 +38,72 @@ foreach(_pc libssl.pc libcrypto.pc openssl.pc)
     endif()
 endforeach()
 
-# CMake wrapper so find_package(OpenSSL) works for CMake-based consumers
+# CMake wrapper so find_package(OpenSSL) works for CMake-based consumers.
+# Modeled on the standard vcpkg openssl port wrapper to ensure correct discovery.
 file(WRITE "${CURRENT_PACKAGES_DIR}/share/${PORT}/vcpkg-cmake-wrapper.cmake" [[
+cmake_policy(PUSH)
+cmake_policy(SET CMP0012 NEW)
+cmake_policy(SET CMP0054 NEW)
+cmake_policy(SET CMP0057 NEW)
+
+# vcpkg handles linkage via the triplet — temporarily disable OPENSSL_USE_STATIC_LIBS
+# so FindOpenSSL doesn't reject our libs based on naming conventions.
+if(OPENSSL_USE_STATIC_LIBS)
+    set(OPENSSL_USE_STATIC_LIBS_BAK "${OPENSSL_USE_STATIC_LIBS}")
+    set(OPENSSL_USE_STATIC_LIBS FALSE)
+endif()
+
+# Point FindOpenSSL at the vcpkg installed tree
+if(DEFINED OPENSSL_ROOT_DIR)
+    set(OPENSSL_ROOT_DIR_BAK "${OPENSSL_ROOT_DIR}")
+endif()
+get_filename_component(OPENSSL_ROOT_DIR "${CMAKE_CURRENT_LIST_DIR}" DIRECTORY)
+get_filename_component(OPENSSL_ROOT_DIR "${OPENSSL_ROOT_DIR}" DIRECTORY)
+find_path(OPENSSL_INCLUDE_DIR NAMES openssl/ssl.h PATHS "${OPENSSL_ROOT_DIR}/include" NO_DEFAULT_PATH)
+
+# Pre-find libraries so _find_package picks them up from cache
+find_library(OPENSSL_CRYPTO_LIBRARY NAMES crypto PATHS "${OPENSSL_ROOT_DIR}/lib" NO_DEFAULT_PATH)
+find_library(OPENSSL_SSL_LIBRARY NAMES ssl PATHS "${OPENSSL_ROOT_DIR}/lib" NO_DEFAULT_PATH)
+
 _find_package(${ARGS})
-if(NOT OPENSSL_FOUND)
-    set(OPENSSL_FOUND TRUE)
-    set(OPENSSL_INCLUDE_DIR "${_VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include")
-    set(OPENSSL_CRYPTO_LIBRARY "${_VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib/libcrypto.a")
-    set(OPENSSL_SSL_LIBRARY "${_VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib/libssl.a")
-    set(OPENSSL_LIBRARIES "${OPENSSL_SSL_LIBRARY};${OPENSSL_CRYPTO_LIBRARY}")
-    if(NOT TARGET OpenSSL::Crypto)
-        add_library(OpenSSL::Crypto STATIC IMPORTED)
-        set_target_properties(OpenSSL::Crypto PROPERTIES
-            IMPORTED_LOCATION "${OPENSSL_CRYPTO_LIBRARY}"
-            INTERFACE_INCLUDE_DIRECTORIES "${OPENSSL_INCLUDE_DIR}")
-    endif()
-    if(NOT TARGET OpenSSL::SSL)
-        add_library(OpenSSL::SSL STATIC IMPORTED)
-        set_target_properties(OpenSSL::SSL PROPERTIES
-            IMPORTED_LOCATION "${OPENSSL_SSL_LIBRARY}"
-            INTERFACE_INCLUDE_DIRECTORIES "${OPENSSL_INCLUDE_DIR}"
-            INTERFACE_LINK_LIBRARIES "OpenSSL::Crypto")
+
+unset(OPENSSL_ROOT_DIR)
+if(DEFINED OPENSSL_ROOT_DIR_BAK)
+    set(OPENSSL_ROOT_DIR "${OPENSSL_ROOT_DIR_BAK}")
+    unset(OPENSSL_ROOT_DIR_BAK)
+endif()
+
+if(DEFINED OPENSSL_USE_STATIC_LIBS_BAK)
+    set(OPENSSL_USE_STATIC_LIBS "${OPENSSL_USE_STATIC_LIBS_BAK}")
+    unset(OPENSSL_USE_STATIC_LIBS_BAK)
+endif()
+
+# Static builds need -ldl and -lpthread on Unix
+if(OPENSSL_FOUND)
+    if(NOT WIN32)
+        find_library(OPENSSL_DL_LIBRARY NAMES dl)
+        if(OPENSSL_DL_LIBRARY)
+            list(APPEND OPENSSL_LIBRARIES "dl")
+            if(TARGET OpenSSL::Crypto)
+                set_property(TARGET OpenSSL::Crypto APPEND PROPERTY INTERFACE_LINK_LIBRARIES "dl")
+            endif()
+        endif()
+
+        if("REQUIRED" IN_LIST ARGS)
+            find_package(Threads REQUIRED)
+        else()
+            find_package(Threads)
+        endif()
+        list(APPEND OPENSSL_LIBRARIES ${CMAKE_THREAD_LIBS_INIT})
+        if(TARGET OpenSSL::Crypto)
+            set_property(TARGET OpenSSL::Crypto APPEND PROPERTY INTERFACE_LINK_LIBRARIES "Threads::Threads")
+        endif()
+        if(TARGET OpenSSL::SSL)
+            set_property(TARGET OpenSSL::SSL APPEND PROPERTY INTERFACE_LINK_LIBRARIES "Threads::Threads")
+        endif()
     endif()
 endif()
+cmake_policy(POP)
 ]])
 
 # Copyright
