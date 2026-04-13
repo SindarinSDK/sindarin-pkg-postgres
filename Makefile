@@ -95,6 +95,7 @@ release-build:
 	    cp "C:/ProgramData/chocolatey/bin/win_bison.exe" "C:/ProgramData/chocolatey/bin/bison.exe" 2>/dev/null || true; \
 	    cp "C:/ProgramData/chocolatey/bin/win_flex.exe" "C:/ProgramData/chocolatey/bin/flex.exe" 2>/dev/null || true; \
 	fi
+	$(SN) --install
 	"$(VCPKG_ROOT)/vcpkg" install --triplet=$(TRIPLET) --x-install-root=vcpkg/installed
 	mkdir -p libs/$(PLATFORM)/lib libs/$(PLATFORM)/include
 	find vcpkg/installed/$(TRIPLET)/lib -maxdepth 1 -name "*.a" -exec cp {} libs/$(PLATFORM)/lib/ \;
