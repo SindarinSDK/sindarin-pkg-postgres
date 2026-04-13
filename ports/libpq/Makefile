@@ -15,6 +15,7 @@ endif
 
 .PHONY: all
 all:
+	$(MAKE) -C src/backend generated-headers
 	$(MAKE) -C src/include
 	$(MAKE) -C src/common
 	$(MAKE) -C src/port
