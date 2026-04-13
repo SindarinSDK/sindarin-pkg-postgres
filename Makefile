@@ -91,7 +91,7 @@ release-build:
 	    git clone https://github.com/microsoft/vcpkg.git "$(VCPKG_ROOT)" && \
 	    "$(VCPKG_ROOT)/bootstrap-vcpkg.sh" -disableMetrics; \
 	fi
-	MAKEFLAGS="-j1" VCPKG_MAX_CONCURRENCY=1 "$(VCPKG_ROOT)/vcpkg" install --triplet=$(TRIPLET) --x-install-root=vcpkg/installed
+	"$(VCPKG_ROOT)/vcpkg" install --triplet=$(TRIPLET) --x-install-root=vcpkg/installed
 	mkdir -p libs/$(PLATFORM)/lib libs/$(PLATFORM)/include
 	find vcpkg/installed/$(TRIPLET)/lib -maxdepth 1 -name "*.a" -exec cp {} libs/$(PLATFORM)/lib/ \;
 	cp -r vcpkg/installed/$(TRIPLET)/include/* libs/$(PLATFORM)/include/
