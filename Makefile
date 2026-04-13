@@ -91,6 +91,10 @@ release-build:
 	    git clone https://github.com/microsoft/vcpkg.git "$(VCPKG_ROOT)" && \
 	    "$(VCPKG_ROOT)/bootstrap-vcpkg.sh" -disableMetrics; \
 	fi
+	@if [ -f "C:/ProgramData/chocolatey/bin/win_bison.exe" ]; then \
+	    cp "C:/ProgramData/chocolatey/bin/win_bison.exe" "C:/ProgramData/chocolatey/bin/bison.exe" 2>/dev/null || true; \
+	    cp "C:/ProgramData/chocolatey/bin/win_flex.exe" "C:/ProgramData/chocolatey/bin/flex.exe" 2>/dev/null || true; \
+	fi
 	"$(VCPKG_ROOT)/vcpkg" install --triplet=$(TRIPLET) --x-install-root=vcpkg/installed
 	mkdir -p libs/$(PLATFORM)/lib libs/$(PLATFORM)/include
 	find vcpkg/installed/$(TRIPLET)/lib -maxdepth 1 -name "*.a" -exec cp {} libs/$(PLATFORM)/lib/ \;

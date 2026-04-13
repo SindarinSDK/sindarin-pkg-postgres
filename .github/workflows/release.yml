@@ -22,3 +22,4 @@ jobs:
       package-name: sindarin-postgres
       apt-packages: "autoconf gperf flex bison perl"
       brew-packages: "autoconf gperf flex bison"
+      choco-packages: "winflexbison3"
