@@ -8,6 +8,7 @@
 ifeq ($(OS),Windows_NT)
     PLATFORM := windows
     EXE_EXT  := .exe
+    PLATFORM_LDFLAGS := -lsecur32 -lws2_32 -lcrypt32 -lwldap32
 else
     UNAME_S := $(shell uname -s 2>/dev/null || echo Unknown)
     ifeq ($(UNAME_S),Darwin)
@@ -16,6 +17,7 @@ else
         PLATFORM := linux
     endif
     EXE_EXT :=
+    PLATFORM_LDFLAGS :=
 endif
 
 BIN_DIR      := bin
@@ -36,7 +38,7 @@ endif
 test: setup $(RUN_TESTS)
 	@PGHOST=localhost PGPORT=5432 PGDATABASE=testdb PGUSER=postgres PGPASSWORD=postgres \
 	 SN_CFLAGS="-I$(CURDIR)/libs/$(PLATFORM)/include $(SN_CFLAGS)" \
-	 SN_LDFLAGS="-L$(CURDIR)/libs/$(PLATFORM)/lib $(SN_LDFLAGS)" \
+	 SN_LDFLAGS="-L$(CURDIR)/libs/$(PLATFORM)/lib $(PLATFORM_LDFLAGS) $(SN_LDFLAGS)" \
 	 $(RUN_TESTS) --verbose
 
 teardown:
@@ -47,7 +49,7 @@ $(BIN_DIR):
 
 $(RUN_TESTS): $(RUN_TESTS_SN) $(SRC_SOURCES) | $(BIN_DIR)
 	@SN_CFLAGS="-I$(CURDIR)/libs/$(PLATFORM)/include $(SN_CFLAGS)" \
-	 SN_LDFLAGS="-L$(CURDIR)/libs/$(PLATFORM)/lib $(SN_LDFLAGS)" \
+	 SN_LDFLAGS="-L$(CURDIR)/libs/$(PLATFORM)/lib $(PLATFORM_LDFLAGS) $(SN_LDFLAGS)" \
 	 $(SN) $(RUN_TESTS_SN) -o $@ -l 1
 
 VCPKG_ROOT ?= $(CURDIR)/vcpkg

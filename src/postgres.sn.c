@@ -21,6 +21,17 @@
 
 #include <libpq-fe.h>
 
+#ifdef _WIN32
+/* vcpkg's static build of libpgcommon.a bundles _shlib object files that
+ * reference PostgreSQL's server-side memory allocator (palloc/pfree).
+ * These symbols are not available in a client-only build, so we provide
+ * trivial libc wrappers to satisfy the linker. */
+void  pfree(void *ptr)                 { free(ptr); }
+void *palloc(size_t size)              { void *p = malloc(size); if (!p) { fprintf(stderr, "out of memory\n"); exit(1); } return p; }
+char *pstrdup(const char *s)           { return strdup(s); }
+void *repalloc(void *ptr, size_t size) { void *p = realloc(ptr, size); if (!p) { fprintf(stderr, "out of memory\n"); exit(1); } return p; }
+#endif
+
 /* ============================================================================
  * Type Definitions
  * ============================================================================ */
