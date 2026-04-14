@@ -6,3 +6,7 @@ vcpkg/
 *.o
 *.so
 *.a
+
+# Valgrind / massif profiler output
+massif.out*
+massif_*.out

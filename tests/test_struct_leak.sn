@@ -1,0 +1,134 @@
+import "../.sn/sindarin-pkg-sdk/src/core/fields"
+import "../.sn/sindarin-pkg-sdk/src/core/uuid"
+
+# Mimics skynet's Observation struct
+@serializable
+struct TestObs =>
+  id: str
+  source: str
+  timestamp: int
+  features: NumericField[]
+  metadata: StringField[]
+
+fn createObs(i: int): TestObs =>
+  var features: NumericField[] = {
+    NumericField {
+      key: "vsd_freq_vgf01",
+      value: 38.0
+    },
+    NumericField {
+      key: "amps_vgf01",
+      value: 16.0
+    },
+    NumericField {
+      key: "amps_cru01",
+      value: 125.0
+    },
+    NumericField {
+      key: "amps_cvr01",
+      value: 35.0
+    },
+    NumericField {
+      key: "amps_mgt01",
+      value: 4.5
+    },
+    NumericField {
+      key: "amps_scr01",
+      value: 42.0
+    },
+    NumericField {
+      key: "amps_cvr04",
+      value: 30.0
+    },
+    NumericField {
+      key: "weight_cvr04",
+      value: 100.0
+    },
+    NumericField {
+      key: "speed_cvr04",
+      value: 1.5
+    },
+    NumericField {
+      key: "iso_vgf01",
+      value: 1.0
+    },
+    NumericField {
+      key: "iso_cru01",
+      value: 1.0
+    },
+    NumericField {
+      key: "iso_cvr01",
+      value: 1.0
+    },
+    NumericField {
+      key: "iso_mgt01",
+      value: 1.0
+    },
+    NumericField {
+      key: "iso_scr01",
+      value: 1.0
+    },
+    NumericField {
+      key: "iso_cvr04",
+      value: 1.0
+    },
+    NumericField {
+      key: "speed_ok_cvr01",
+      value: 1.0
+    },
+    NumericField {
+      key: "aligned_cvr01",
+      value: 1.0
+    },
+    NumericField {
+      key: "trip_cvr01",
+      value: 0.0
+    },
+    NumericField {
+      key: "metal_detect",
+      value: 0.0
+    },
+    NumericField {
+      key: "aligned_cvr04_a",
+      value: 1.0
+    },
+    NumericField {
+      key: "aligned_cvr04_b",
+      value: 1.0
+    },
+    NumericField {
+      key: "kw_cru01",
+      value: 93.0
+    },
+    NumericField {
+      key: "kw_scr01",
+      value: 17.0
+    },
+    NumericField {
+      key: "kw_cvr04",
+      value: 11.0
+    }
+  }
+  return TestObs {
+    id: UUID.create().toString(),
+    source: "crusher-sim",
+    timestamp: i,
+    features: features,
+    metadata: { StringField {
+      key: "action",
+      value: "hold"
+    } }
+  }
+
+fn main(): void =>
+  var iterations: int = 10000
+  print($"Running {iterations} struct creation cycles...\n")
+
+  for var i: int = 0; i < iterations; i++ =>
+    var obs: TestObs = createObs(i)
+
+    # Mimic string interpolation for bind params
+    var tsStr: str = $"{obs.timestamp}"
+
+  print($"Done: {iterations} cycles\n")
+  print("PASS\n")

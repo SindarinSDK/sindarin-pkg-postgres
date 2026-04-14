@@ -1,0 +1,38 @@
+import "../src/postgres"
+import "../.sn/sindarin-pkg-sdk/src/os/env"
+
+fn connStr(): str =>
+  var host: str = Environment.getOr("PGHOST", "localhost")
+  var port: str = Environment.getOr("PGPORT", "5432")
+  var db: str = Environment.getOr("PGDATABASE", "skynet")
+  var user: str = Environment.getOr("PGUSER", "skynet")
+  var pass: str = Environment.getOr("PGPASSWORD", "skynet_dev")
+  return $"host={host} port={port} dbname={db} user={user} password={pass}"
+
+fn main(): void =>
+  var conn: PgConn = PgConn.connect(connStr())
+
+  conn.exec("DROP TABLE IF EXISTS sn_leak_test")
+  conn.exec("CREATE TABLE sn_leak_test (id SERIAL PRIMARY KEY, source TEXT, ts TEXT, features TEXT, metadata TEXT)")
+  print("Table created\n")
+
+  # Pattern 1: prepare + bind + exec + dispose in a loop (observer pattern)
+  # This is what persistObservations does 10x/sec
+  var iterations: int = 10000
+  print($"Running {iterations} prepare/dispose cycles...\n")
+
+  for var i: int = 0; i < iterations; i++ =>
+    var stmt: PgStmt = conn.prepare("ins_leak", "INSERT INTO sn_leak_test (source, ts, features, metadata) VALUES ($1, $2, $3, $4)")
+    stmt.reset()
+    stmt.bindString(1, "test-source")
+    stmt.bindString(2, $"{i}")
+    stmt.bindString(3, "{\"key\":\"value\"}")
+    stmt.bindString(4, "{\"meta\":\"data\"}")
+    stmt.exec()
+    stmt.dispose()
+
+  print($"Done: {iterations} prepare/dispose cycles\n")
+
+  conn.exec("DROP TABLE sn_leak_test")
+  conn.dispose()
+  print("PASS\n")
