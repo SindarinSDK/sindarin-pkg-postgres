@@ -1,0 +1,162 @@
+# Tests for the binary-result path: scalar text parity and array decoders.
+#
+# All tests are rooted against a single connection with TIMEZONE=UTC so
+# TIMESTAMPTZ stringification is deterministic. Every scalar decode is
+# cross-checked against `col::text` from postgres itself to guarantee
+# the binary-path getString output matches postgres's own text output.
+
+import "../src/postgres"
+import "../.sn/sindarin-pkg-sdk/src/os/env"
+
+fn connStr(): str =>
+  var host: str = Environment.getOr("PGHOST", "localhost")
+  var port: str = Environment.getOr("PGPORT", "5432")
+  var db: str = Environment.getOr("PGDATABASE", "postgres")
+  var user: str = Environment.getOr("PGUSER", "postgres")
+  var pass: str = Environment.getOr("PGPASSWORD", "")
+  return $"host={host} port={port} dbname={db} user={user} password={pass}"
+
+# Assert helper — print and exit(1) on mismatch
+fn assertEq(label: str, expected: str, actual: str): void =>
+  if expected != actual =>
+    print($"FAIL [{label}]: expected '{expected}' got '{actual}'\n")
+    exit(1)
+  print($"PASS [{label}]\n")
+
+fn assertEqInt(label: str, expected: int, actual: int): void =>
+  if expected != actual =>
+    print($"FAIL [{label}]: expected {expected} got {actual}\n")
+    exit(1)
+  print($"PASS [{label}]\n")
+
+fn assertEqDouble(label: str, expected: double, actual: double): void =>
+  if expected != actual =>
+    print($"FAIL [{label}]: expected {expected} got {actual}\n")
+    exit(1)
+  print($"PASS [{label}]\n")
+
+# Parity check: fetch one value under two column aliases — `bin` (binary decode)
+# and `txt` (postgres's own ::text cast). If getString(bin) equals the text of
+# the textual column, binary stringification round-trips correctly.
+fn parityCheck(conn: PgConn, label: str, sql: str): void =>
+  var rows: PgRow[] = conn.query(sql)
+  if rows.length != 1 =>
+    print($"FAIL [{label}]: expected 1 row, got {rows.length}\n")
+    exit(1)
+  var bin: str = rows[0].getString("bin")
+  var txt: str = rows[0].getString("txt")
+  assertEq(label, txt, bin)
+
+fn main(): void =>
+  var conn: PgConn = PgConn.connect(connStr())
+  conn.exec("SET TIMEZONE TO 'UTC'")
+
+  # ==========================================================================
+  # Scalar parity — each value is fetched as binary and as ::text, compared.
+  # ==========================================================================
+
+  # bool wire-format output is "t"/"f" (not ::text's "true"/"false")
+  var boolRows: PgRow[] = conn.query("SELECT true AS t, false AS f")
+  assertEq("bool true", "t", boolRows[0].getString("t"))
+  assertEq("bool false", "f", boolRows[0].getString("f"))
+  parityCheck(conn, "int2", "SELECT 32000::int2 AS bin, 32000::int2::text AS txt")
+  parityCheck(conn, "int4", "SELECT (-12345)::int4 AS bin, (-12345)::int4::text AS txt")
+  parityCheck(conn, "int8", "SELECT 9223372036854775000::int8 AS bin, 9223372036854775000::int8::text AS txt")
+  parityCheck(conn, "float4", "SELECT 1.5::float4 AS bin, 1.5::float4::text AS txt")
+  parityCheck(conn, "float8", "SELECT 3.141592653589793::float8 AS bin, 3.141592653589793::float8::text AS txt")
+  parityCheck(conn, "text", "SELECT 'hello, world'::text AS bin, 'hello, world'::text AS txt")
+  parityCheck(conn, "varchar", "SELECT 'abc'::varchar(10) AS bin, 'abc'::varchar(10)::text AS txt")
+  parityCheck(conn, "uuid", "SELECT '12345678-1234-5678-1234-567812345678'::uuid AS bin, '12345678-1234-5678-1234-567812345678'::uuid::text AS txt")
+  parityCheck(conn, "date", "SELECT '2026-04-20'::date AS bin, '2026-04-20'::date::text AS txt")
+  parityCheck(conn, "date epoch", "SELECT '2000-01-01'::date AS bin, '2000-01-01'::date::text AS txt")
+  parityCheck(conn, "date old", "SELECT '1970-06-15'::date AS bin, '1970-06-15'::date::text AS txt")
+  parityCheck(conn, "time", "SELECT '10:30:00'::time AS bin, '10:30:00'::time::text AS txt")
+  parityCheck(conn, "time micro", "SELECT '23:59:59.123456'::time AS bin, '23:59:59.123456'::time::text AS txt")
+  parityCheck(conn, "timestamp", "SELECT '2026-04-20 10:30:00'::timestamp AS bin, '2026-04-20 10:30:00'::timestamp::text AS txt")
+  parityCheck(conn, "timestamptz", "SELECT '2026-04-20 10:30:00+00'::timestamptz AS bin, '2026-04-20 10:30:00+00'::timestamptz::text AS txt")
+
+  # NUMERIC — the hairy one. Postgres text format is a canonical decimal.
+  parityCheck(conn, "numeric 0", "SELECT 0::numeric AS bin, 0::numeric::text AS txt")
+  parityCheck(conn, "numeric integer", "SELECT 12345::numeric AS bin, 12345::numeric::text AS txt")
+  parityCheck(conn, "numeric fract", "SELECT 123.45::numeric(10,2) AS bin, 123.45::numeric(10,2)::text AS txt")
+  parityCheck(conn, "numeric tiny", "SELECT 0.001::numeric(10,3) AS bin, 0.001::numeric(10,3)::text AS txt")
+  parityCheck(conn, "numeric small", "SELECT 0.00001::numeric(10,5) AS bin, 0.00001::numeric(10,5)::text AS txt")
+  parityCheck(conn, "numeric neg", "SELECT (-123.45)::numeric(10,2) AS bin, (-123.45)::numeric(10,2)::text AS txt")
+  parityCheck(conn, "numeric large", "SELECT 9999999999.99::numeric(14,2) AS bin, 9999999999.99::numeric(14,2)::text AS txt")
+  parityCheck(conn, "numeric 10000", "SELECT 10000::numeric AS bin, 10000::numeric::text AS txt")
+  parityCheck(conn, "numeric 10000.5", "SELECT 10000.5::numeric(10,1) AS bin, 10000.5::numeric(10,1)::text AS txt")
+  parityCheck(conn, "numeric trailing", "SELECT 1.100::numeric(10,3) AS bin, 1.100::numeric(10,3)::text AS txt")
+
+  # BYTEA — postgres hex form "\xDEADBEEF"
+  parityCheck(conn, "bytea",
+    "SELECT '\\xDEADBEEF'::bytea AS bin, '\\xDEADBEEF'::bytea::text AS txt")
+
+  # ==========================================================================
+  # getInt / getFloat coercion across types — SERIAL (int4), int8, numeric
+  # ==========================================================================
+
+  var coerceRows: PgRow[] = conn.query(
+    "SELECT 42::int4 AS i4, 99::int8 AS i8, 3.14::float8 AS f8, 50::numeric AS num")
+  assertEqInt("getInt on int4", 42, coerceRows[0].getInt("i4"))
+  assertEqInt("getInt on int8", 99, coerceRows[0].getInt("i8"))
+  assertEqDouble("getFloat on float8", 3.14, coerceRows[0].getFloat("f8"))
+  assertEqInt("getInt on numeric", 50, coerceRows[0].getInt("num"))
+
+  # ==========================================================================
+  # Array decoding
+  # ==========================================================================
+
+  conn.exec("DROP TABLE IF EXISTS sn_pg_arr_test")
+  conn.exec("CREATE TABLE sn_pg_arr_test (id SERIAL PRIMARY KEY, scores float8[], ids int4[], bigs int8[], tags text[])")
+  conn.exec("INSERT INTO sn_pg_arr_test (scores, ids, bigs, tags) VALUES (ARRAY[1.5, 2.5, 3.5]::float8[], ARRAY[10, 20, 30]::int4[], ARRAY[1000000000000, -2000000000000]::int8[], ARRAY['alpha', 'beta', 'gamma']::text[])")
+  conn.exec("INSERT INTO sn_pg_arr_test (scores) VALUES (ARRAY[]::float8[])")
+  conn.exec("INSERT INTO sn_pg_arr_test (scores) VALUES (ARRAY[1.0, NULL, 3.0]::float8[])")
+
+  var arrRows: PgRow[] = conn.query("SELECT scores, ids, bigs, tags FROM sn_pg_arr_test WHERE id = 1")
+
+  var scores: double[] = arrRows[0].getFloatArray("scores")
+  assertEqInt("float8[] length", 3, scores.length)
+  assertEqDouble("float8[][0]", 1.5, scores[0])
+  assertEqDouble("float8[][1]", 2.5, scores[1])
+  assertEqDouble("float8[][2]", 3.5, scores[2])
+
+  var ids: int[] = arrRows[0].getIntArray("ids")
+  assertEqInt("int4[] length", 3, ids.length)
+  assertEqInt("int4[][0]", 10, ids[0])
+  assertEqInt("int4[][1]", 20, ids[1])
+  assertEqInt("int4[][2]", 30, ids[2])
+
+  var bigs: int[] = arrRows[0].getIntArray("bigs")
+  assertEqInt("int8[] length", 2, bigs.length)
+  assertEqInt("int8[][0]", 1000000000000, bigs[0])
+  assertEqInt("int8[][1]", -2000000000000, bigs[1])
+
+  var tags: str[] = arrRows[0].getStringArray("tags")
+  assertEqInt("text[] length", 3, tags.length)
+  assertEq("text[][0]", "alpha", tags[0])
+  assertEq("text[][1]", "beta", tags[1])
+  assertEq("text[][2]", "gamma", tags[2])
+
+  # Empty array
+  var emptyRows: PgRow[] = conn.query("SELECT scores FROM sn_pg_arr_test WHERE id = 2")
+  var empty: double[] = emptyRows[0].getFloatArray("scores")
+  assertEqInt("empty float8[] length", 0, empty.length)
+
+  # Array with a NULL element — postgres encodes the element length as -1.
+  # getFloatArray substitutes 0.0 for NULLs (matches getFloat semantics).
+  var nullRows: PgRow[] = conn.query("SELECT scores FROM sn_pg_arr_test WHERE id = 3")
+  var withNull: double[] = nullRows[0].getFloatArray("scores")
+  assertEqInt("null-elem float8[] length", 3, withNull.length)
+  assertEqDouble("null-elem [0]", 1.0, withNull[0])
+  assertEqDouble("null-elem [1]", 0.0, withNull[1])
+  assertEqDouble("null-elem [2]", 3.0, withNull[2])
+
+  # SQL NULL array → empty array from getFloatArray
+  conn.exec("INSERT INTO sn_pg_arr_test (id) VALUES (DEFAULT)")
+  var nullArrRows: PgRow[] = conn.query("SELECT scores FROM sn_pg_arr_test WHERE scores IS NULL LIMIT 1")
+  var nullArr: double[] = nullArrRows[0].getFloatArray("scores")
+  assertEqInt("NULL array → empty length", 0, nullArr.length)
+
+  conn.exec("DROP TABLE sn_pg_arr_test")
+  conn.dispose()
+  print("PASS\n")

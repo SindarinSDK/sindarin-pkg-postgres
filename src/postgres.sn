@@ -31,6 +31,9 @@
 # row.getString(col): str                       Column value as string ("" for NULL)
 # row.getInt(col): int                          Column value as integer (0 for NULL)
 # row.getFloat(col): double                     Column value as float (0.0 for NULL)
+# row.getFloatArray(col): double[]              Column value as array of doubles
+# row.getIntArray(col): int[]                   Column value as array of ints
+# row.getStringArray(col): str[]                Column value as array of strings
 # row.isNull(col): bool                         True if column is SQL NULL
 # row.columnCount(): int                        Number of columns in this row
 # row.columnName(index): str                    Column name at zero-based index
@@ -64,6 +67,10 @@ native struct PgRow =>
   _colNames: long
   @alias "col_values"
   _colValues: long
+  @alias "col_lens"
+  _colLens: long
+  @alias "col_types"
+  _colTypes: long
   @alias "col_nulls"
   _colNulls: long
   @alias "col_count"
@@ -80,6 +87,18 @@ native struct PgRow =>
   # Get float value for a named column (returns 0.0 for SQL NULL)
   @alias "sn_pg_row_get_float"
   native fn getFloat(col: str): double
+
+  # Get array of doubles for a named column (empty array for SQL NULL)
+  @alias "sn_pg_row_get_float_array"
+  native fn getFloatArray(col: str): double[]
+
+  # Get array of ints for a named column (empty array for SQL NULL)
+  @alias "sn_pg_row_get_int_array"
+  native fn getIntArray(col: str): int[]
+
+  # Get array of strings for a named column (empty array for SQL NULL)
+  @alias "sn_pg_row_get_string_array"
+  native fn getStringArray(col: str): str[]
 
   # Check if a named column value is SQL NULL
   @alias "sn_pg_row_is_null"
