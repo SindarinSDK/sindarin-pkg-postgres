@@ -1108,6 +1108,15 @@ char *sn_pg_conn_last_error(RtPgConn *c)
     return strdup(msg ? msg : "");
 }
 
+/* Diagnostic: return the SnPgConn wrapper pointer as a long. Lets
+ * callers distinguish conns by identity across threads without
+ * exposing the internal conn_ptr field directly. */
+long long sn_pg_conn_identity(RtPgConn *c)
+{
+    if (!c) return 0;
+    return (long long)(uintptr_t)CONN_W(c);
+}
+
 void sn_pg_conn_dispose(RtPgConn *c)
 {
     if (!c) return;
