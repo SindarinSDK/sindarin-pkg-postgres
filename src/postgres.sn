@@ -196,12 +196,6 @@ native struct PgConn as ref =>
   @alias "sn_pg_conn_last_error"
   native fn lastError(): str
 
-  # Internal wrapper pointer as a long — diagnostic only, so callers
-  # can distinguish conns by identity without exposing internals as
-  # a field. Returns the SnPgConn* cast to long long.
-  @alias "sn_pg_conn_identity"
-  native fn identity(): long
-
   # Close the connection and free resources
   @alias "sn_pg_conn_dispose"
   native fn dispose(): void
