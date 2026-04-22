@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <math.h>
+#include <unistd.h>
 
 #include <libpq-fe.h>
 
@@ -213,21 +214,11 @@ static void snpg_cache_remove(SnPgConn *w, const char *name)
     }
 }
 
-/* Try to bring the connection back up after a server-side crash. Calls
- * PQreset (which keeps the existing PGconn pointer valid — important
- * because PgStmt instances hold pointers into the wrapper) and replays
- * every cached prepared statement. Returns true on success. */
-static bool snpg_try_reconnect(SnPgConn *w)
+/* Re-prepare every cached statement on the wrapper's current PGconn.
+ * Returns true iff all succeed. Called after a successful PQreset or a
+ * fresh PQconnectdb so the app's prepared-stmt handles stay valid. */
+static bool snpg_replay_cache(SnPgConn *w)
 {
-    if (!w || !w->conn) return false;
-    fprintf(stderr, "postgres: connection lost — attempting PQreset\n");
-    PQreset(w->conn);
-    if (PQstatus(w->conn) != CONNECTION_OK) {
-        fprintf(stderr, "postgres: PQreset failed: %s\n", PQerrorMessage(w->conn));
-        return false;
-    }
-    fprintf(stderr, "postgres: PQreset succeeded; re-preparing %d cached statement(s)\n",
-            w->cache_count);
     for (int i = 0; i < w->cache_count; i++) {
         PGresult *r = PQprepare(w->conn, w->cache_names[i], w->cache_sqls[i], 0, NULL);
         ExecStatusType st = PQresultStatus(r);
@@ -240,6 +231,106 @@ static bool snpg_try_reconnect(SnPgConn *w)
         PQclear(r);
     }
     return true;
+}
+
+/* Try to bring the connection back up after a transient postgres outage.
+ *
+ * Strategy:
+ *   1. Try PQreset up to RESET_ATTEMPTS times with exponential backoff.
+ *      PQreset keeps the existing PGconn pointer valid, which is ideal
+ *      because PgStmt instances hold pointers into the wrapper.
+ *   2. If PQreset keeps failing, fall through to a full teardown:
+ *      PQfinish + PQconnectdb with the saved conninfo string, up to
+ *      RECONNECT_ATTEMPTS times with longer backoff. The PGconn pointer
+ *      inside the wrapper is replaced in place so existing PgStmt
+ *      references still resolve through CONN_PTR(c).
+ *   3. On any successful (re)connection, replay the prepared-statement
+ *      cache so the app's PgStmt handles immediately work again.
+ *
+ * Total worst-case budget with the defaults below: ~1 minute. Short
+ * enough that a genuine postgres-down situation still exits promptly;
+ * long enough that a checkpoint hiccup, container restart, or network
+ * blip doesn't kill the process. */
+#define RESET_ATTEMPTS      3
+#define RESET_BACKOFF_MS_0  500
+#define RECONNECT_ATTEMPTS  5
+#define RECONNECT_BACKOFF_MS_0 2000
+#define RECONNECT_BACKOFF_MS_MAX 30000
+
+static void snpg_sleep_ms(int ms)
+{
+    if (ms <= 0) return;
+    usleep((useconds_t)ms * 1000u);
+}
+
+static bool snpg_try_reconnect(SnPgConn *w)
+{
+    if (!w) return false;
+    fprintf(stderr, "postgres: connection lost — attempting PQreset\n");
+
+    int backoff = RESET_BACKOFF_MS_0;
+    for (int attempt = 1; attempt <= RESET_ATTEMPTS; attempt++) {
+        if (w->conn) PQreset(w->conn);
+        if (w->conn && PQstatus(w->conn) == CONNECTION_OK) {
+            fprintf(stderr, "postgres: PQreset succeeded on attempt %d; "
+                    "re-preparing %d cached statement(s)\n",
+                    attempt, w->cache_count);
+            if (snpg_replay_cache(w)) return true;
+            /* Re-prepare failed — drop through to full reconnect below. */
+            fprintf(stderr, "postgres: cache replay failed after PQreset; "
+                    "falling back to full reconnect\n");
+            break;
+        }
+        fprintf(stderr, "postgres: PQreset attempt %d/%d failed: %s\n",
+                attempt, RESET_ATTEMPTS,
+                w->conn ? PQerrorMessage(w->conn) : "(null conn)");
+        if (attempt < RESET_ATTEMPTS) {
+            snpg_sleep_ms(backoff);
+            backoff *= 4;
+        }
+    }
+
+    /* PQreset path exhausted. Try full teardown + reconnect using the
+     * original conninfo. */
+    if (!w->conn_str) {
+        fprintf(stderr, "postgres: no saved conninfo; cannot full-reconnect\n");
+        return false;
+    }
+    fprintf(stderr, "postgres: falling back to full PQconnectdb; "
+            "up to %d attempts\n", RECONNECT_ATTEMPTS);
+
+    backoff = RECONNECT_BACKOFF_MS_0;
+    for (int attempt = 1; attempt <= RECONNECT_ATTEMPTS; attempt++) {
+        if (w->conn) {
+            PQfinish(w->conn);
+            w->conn = NULL;
+        }
+        PGconn *fresh = PQconnectdb(w->conn_str);
+        if (fresh && PQstatus(fresh) == CONNECTION_OK) {
+            w->conn = fresh;
+            fprintf(stderr, "postgres: PQconnectdb succeeded on attempt %d; "
+                    "re-preparing %d cached statement(s)\n",
+                    attempt, w->cache_count);
+            if (snpg_replay_cache(w)) return true;
+            /* Fresh conn is alive but cache replay broke — treat as fatal,
+             * the statement set is presumably wedged. */
+            fprintf(stderr, "postgres: cache replay failed on fresh conn; "
+                    "giving up\n");
+            return false;
+        }
+        fprintf(stderr, "postgres: PQconnectdb attempt %d/%d failed: %s\n",
+                attempt, RECONNECT_ATTEMPTS,
+                fresh ? PQerrorMessage(fresh) : "(null conn)");
+        if (fresh) PQfinish(fresh);
+        if (attempt < RECONNECT_ATTEMPTS) {
+            snpg_sleep_ms(backoff);
+            backoff *= 2;
+            if (backoff > RECONNECT_BACKOFF_MS_MAX) backoff = RECONNECT_BACKOFF_MS_MAX;
+        }
+    }
+
+    fprintf(stderr, "postgres: all reconnect attempts exhausted — giving up\n");
+    return false;
 }
 
 static void pg_check_conn(PGconn *conn, const char *ctx)
