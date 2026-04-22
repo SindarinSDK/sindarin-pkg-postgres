@@ -301,13 +301,17 @@ static bool snpg_try_reconnect(SnPgConn *w)
 
     backoff = RECONNECT_BACKOFF_MS_0;
     for (int attempt = 1; attempt <= RECONNECT_ATTEMPTS; attempt++) {
-        if (w->conn) {
-            PQfinish(w->conn);
-            w->conn = NULL;
-        }
+        /* Do NOT null out w->conn before PQconnectdb. Other wrapper
+         * paths (pg_check_result, PQerrorMessage, etc.) may inspect
+         * w->conn concurrently or after this returns; a NULL here
+         * produces libpq's "connection pointer is NULL" error. We
+         * keep the old (dead) PGconn around until we have a known-good
+         * replacement, then swap + finish in one shot. */
         PGconn *fresh = PQconnectdb(w->conn_str);
         if (fresh && PQstatus(fresh) == CONNECTION_OK) {
+            PGconn *old = w->conn;
             w->conn = fresh;
+            if (old) PQfinish(old);
             fprintf(stderr, "postgres: PQconnectdb succeeded on attempt %d; "
                     "re-preparing %d cached statement(s)\n",
                     attempt, w->cache_count);
